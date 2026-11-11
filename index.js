@@ -56,26 +56,58 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 function isTikTokUrl(url) {
   return /tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com/i.test(url);
 }
-
-// TikWM API ilə video məlumatını al (retry mexanizmi ilə)
-async function getTikTokVideo(url, retries = 3) {
-  const apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`;
-
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(apiUrl, {
-        method: 'GET',
+// Bu funksiyanı köhnə getTikTokVideo-nun yerinə qoy
+async function getTikTokVideo(url) {
+  const attempts = [
+    // 1. Normal tikwm
+    async () => {
+      const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'application/json, text/plain, */*',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Referer': 'https://www.tikwm.com/',
-          'Origin': 'https://www.tikwm.com'
-        },
-        timeout: 15000
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          'Referer': 'https://www.tikwm.com/'
+        }
       });
+      return await res.json();
+    },
+    // 2. Bir az fərqli header
+    async () => {
+      const res = await fetch(`https://tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+          'Accept': '*/*'
+        }
+      });
+      return await res.json();
+    }
+  ];
 
-      const text = await res.text();
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      console.log(`Cəhd ${i + 1}...`);
+      const data = await attempts[i]();
+
+      if (data && data.code === 0 && data.data) {
+        const videoUrl = data.data.hdplay || data.data.play || data.data.wmplay;
+        if (videoUrl) {
+          return {
+            videoUrl,
+            title: data.data.title || 'TikTok Video',
+            author: data.data.author?.nickname || 'Unknown',
+            duration: data.data.duration || 0
+          };
+        }
+      }
+    } catch (err) {
+      console.log(`Cəhd ${i + 1} uğursuz:`, err.message);
+    }
+
+    // Hər cəhddən sonra bir az gözlə
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  throw new Error('Bütün cəhdlər uğursuz oldu. tikwm.com Render IP-ni bloklayır.');
+}
 
       // Boş cavab yoxlaması
       if (!text || text.trim().length === 0) {
