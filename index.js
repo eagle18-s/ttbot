@@ -1,205 +1,196 @@
-require('dotenv').config();
-const { Client, GatewayIntentBits, AttachmentBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
-const express = require('express');
-const fetch = require('node-fetch');
-const fs = require('fs');
-const path = require('path');
+import os
+import time
+import threading
+import logging
+import tempfile
+import asyncio
+from datetime import datetime
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+from flask import Flask
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ChatAction
+import yt_dlp
+import requests
+from dotenv import load_dotenv
 
-// Discord bot
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-});
+load_dotenv()
 
-// Keep-alive (Railway üçün)
-app.get('/', (req, res) => res.send('TikTok Bot işləyir ✅'));
-app.listen(PORT, () => console.log(`Server ${PORT} portunda işləyir`));
+# ================== KONFİQURASİYA ==================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")          # @pervizshydayev-in chat_id-si (rəqəm)
+KEEP_ALIVE_URL = "https://ttbot-vw3o.onrender.com/"
+PING_INTERVAL = 120  # 2 dəqiqə
 
-// Slash command qeydiyyatı
-const commands = [
-  new SlashCommandBuilder()
-    .setName('tt')
-    .setDescription('TikTok videosunu su nişansız yükləyir')
-    .addStringOption(option =>
-      option.setName('link')
-        .setDescription('TikTok video linki')
-        .setRequired(true)
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable yoxdur!")
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# ================== FLASK (Render health check) ==================
+app = Flask(__name__)
+
+@app.route("/")
+def health():
+    return "Bot aktivdir ✅", 200
+
+@app.route("/ping")
+def ping():
+    return "pong", 200
+
+# ================== KEEP-ALIVE + ADMIN MESAJ ==================
+def keep_alive_loop(application: Application):
+    """Hər 2 dəqiqədən bir ping atır və adminə mesaj göndərir"""
+    while True:
+        try:
+            # 1. Sayta ping
+            resp = requests.get(KEEP_ALIVE_URL, timeout=15)
+            status = resp.status_code
+            logger.info(f"Keep-alive ping: {status}")
+
+            # 2. Adminə mesaj
+            if ADMIN_CHAT_ID:
+                msg = f"✅ Ping göndərilib, bot aktivdir\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\nStatus: {status}"
+                try:
+                    # Sync wrapper (python-telegram-bot 21 async-dir)
+                    asyncio.run(
+                        application.bot.send_message(
+                            chat_id=int(ADMIN_CHAT_ID),
+                            text=msg
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Admin mesajı göndərilmədi: {e}")
+
+        except Exception as e:
+            logger.error(f"Keep-alive xətası: {e}")
+
+        time.sleep(PING_INTERVAL)
+
+# ================== VIDEO YÜKLƏMƏ ==================
+def download_video(url: str) -> str | None:
+    """yt-dlp ilə video yükləyir, temp path qaytarır"""
+    ydl_opts = {
+        "format": "best[ext=mp4]/best",
+        "outtmpl": os.path.join(tempfile.gettempdir(), "%(id)s.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "retries": 3,
+        "fragment_retries": 3,
+        # TikTok üçün ən yaxşı no-watermark cəhdi
+        "extractor_args": {
+            "tiktok": {"webpage_download": True}
+        },
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            # bəzən extension dəyişir
+            if not os.path.exists(filename):
+                for f in os.listdir(tempfile.gettempdir()):
+                    if info.get("id") in f:
+                        filename = os.path.join(tempfile.gettempdir(), f)
+                        break
+            return filename if os.path.exists(filename) else None
+    except Exception as e:
+        logger.error(f"Download xətası: {e}")
+        return None
+
+# ================== TELEGRAM HANDLERS ==================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🎬 Salam! Mənə TikTok, Instagram, YouTube və digər linkləri at.\n"
+        "Mən sənə su nişansız video göndərəcəyəm.\n\n"
+        "Sadəcə linki göndər 👇"
     )
-].map(cmd => cmd.toJSON());
 
-const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
 
-(async () => {
-  try {
-    console.log('Slash komandalar qeydiyyat olunur...');
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-    console.log('Slash komandalar uğurla qeydiyyat olundu');
-  } catch (err) {
-    console.error('Slash qeydiyyat xətası:', err);
-  }
-})();
+    if not url.startswith(("http://", "https://")):
+        await update.message.reply_text("Zəhmət olmasa düzgün link göndər.")
+        return
 
-// TikTok video məlumatını almaq
-async function getTikTokVideo(url) {
-  const apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`;
+    await update.message.chat.send_action(ChatAction.UPLOAD_VIDEO)
+    status_msg = await update.message.reply_text("⏳ Video yüklənir, gözləyin...")
 
-  const headersList = [
-    {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'application/json',
-      'Referer': 'https://www.tikwm.com/'
-    },
-    {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-      'Accept': 'application/json'
-    },
-    {
-      'User-Agent': 'TikTok 26.2.0 rv:262018 (iPhone; iOS 16.5; en_US) Cronet',
-      'Accept': 'application/json'
-    }
-  ];
+    file_path = None
+    try:
+        # blocking download-ı thread-də işlədirik
+        loop = asyncio.get_event_loop()
+        file_path = await loop.run_in_executor(None, download_video, url)
 
-  let lastError = null;
+        if not file_path or not os.path.exists(file_path):
+            await status_msg.edit_text("❌ Video yüklənə bilmədi. Linki yoxlayın və ya yenidən cəhd edin.")
+            return
 
-  for (let i = 0; i < headersList.length; i++) {
-    try {
-      const res = await fetch(apiUrl, {
-        method: 'GET',
-        headers: headersList[i],
-        timeout: 15000
-      });
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
 
-      const text = await res.text();
+        if file_size > 49:
+            await status_msg.edit_text(
+                f"⚠️ Video çox böyükdür ({file_size:.1f} MB). Telegram limit 50 MB-dır.\n"
+                "Zəhmət olmasa qısa video göndərin."
+            )
+            return
 
-      if (!text || text.trim().length === 0) {
-        throw new Error('API boş cavab qaytardı');
-      }
+        # Video göndər
+        with open(file_path, "rb") as f:
+            await update.message.reply_video(
+                video=f,
+                caption="✅ Su nişansız video hazırdır!",
+                supports_streaming=True
+            )
 
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        throw new Error('JSON parse xətası');
-      }
+        await status_msg.delete()
 
-      if (data.code !== 0 || !data.data) {
-        throw new Error(data.msg || 'Video tapılmadı');
-      }
+    except Exception as e:
+        logger.error(f"Handler xətası: {e}")
+        await status_msg.edit_text("❌ Xəta baş verdi. Yenidən cəhd edin.")
+    finally:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
 
-      // HD üstünlük verilir
-      const videoUrl = data.data.hdplay || data.data.play || data.data.wmplay;
-      if (!videoUrl) {
-        throw new Error('Video linki tapılmadı');
-      }
+# ================== START ==================
+def run_bot():
+    application = Application.builder().token(BOT_TOKEN).build()
 
-      return {
-        videoUrl,
-        title: data.data.title || 'TikTok Video',
-        author: data.data.author?.nickname || data.data.author || 'Naməlum',
-        cover: data.data.cover
-      };
-    } catch (err) {
-      lastError = err;
-      console.log(`Cəhd ${i + 1} uğursuz:`, err.message);
-      // qısa gözlə
-      await new Promise(r => setTimeout(r, 800));
-    }
-  }
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_link))
 
-  throw new Error(`Video yüklənə bilmədi (${headersList.length} cəhddən sonra): ${lastError?.message || 'Naməlum xəta'}`);
-}
+    # Keep-alive thread
+    keep_alive_thread = threading.Thread(
+        target=keep_alive_loop,
+        args=(application,),
+        daemon=True
+    )
+    keep_alive_thread.start()
+    logger.info("Keep-alive thread started (every 2 min)")
 
-// Video yükləyib Discord-a göndərmək
-async function downloadAndSend(interactionOrMessage, url) {
-  const isInteraction = !!interactionOrMessage.deferReply;
+    # Bot polling
+    logger.info("Bot started...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
-  try {
-    if (isInteraction) {
-      await interactionOrMessage.deferReply();
-    } else {
-      await interactionOrMessage.channel.sendTyping();
-    }
+if __name__ == "__main__":
+    # Render-də PORT environment variable gəlir
+    port = int(os.environ.get("PORT", 10000))
 
-    const info = await getTikTokVideo(url);
+    # Flask-i ayrı thread-də işə salırıq
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
+        daemon=True
+    )
+    flask_thread.start()
+    logger.info(f"Flask health server started on port {port}")
 
-    // Videonu yüklə
-    const videoRes = await fetch(info.videoUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-
-    if (!videoRes.ok) throw new Error('Video yüklənmədi');
-
-    const buffer = await videoRes.buffer();
-
-    // Discord limiti (təhlükəsiz hədd)
-    if (buffer.length > 24 * 1024 * 1024) {
-      throw new Error('Video çox böyükdür (24MB-dan artıq). Discord göndərmir.');
-    }
-
-    const fileName = `tiktok_${Date.now()}.mp4`;
-    const filePath = path.join(__dirname, fileName);
-    fs.writeFileSync(filePath, buffer);
-
-    const attachment = new AttachmentBuilder(filePath, { name: fileName });
-
-    const content = `**\( {info.author}**\n \){info.title}`;
-
-    if (isInteraction) {
-      await interactionOrMessage.editReply({ content, files: [attachment] });
-    } else {
-      await interactionOrMessage.reply({ content, files: [attachment] });
-    }
-
-    // Faylı sil
-    fs.unlinkSync(filePath);
-
-  } catch (err) {
-    console.error(err);
-    const errorMsg = `Xəta baş verdi: ${err.message}`;
-    if (isInteraction) {
-      await interactionOrMessage.editReply(errorMsg).catch(() => {});
-    } else {
-      await interactionOrMessage.reply(errorMsg).catch(() => {});
-    }
-  }
-}
-
-// Slash command
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-
-  if (interaction.commandName === 'tt') {
-    const url = interaction.options.getString('link');
-    if (!url.includes('tiktok.com') && !url.includes('vt.tiktok.com')) {
-      return interaction.reply({ content: 'Düzgün TikTok linki göndərin.', ephemeral: true });
-    }
-    await downloadAndSend(interaction, url);
-  }
-});
-
-// Avtomatik link aşkarlama
-client.on('messageCreate', async message => {
-  if (message.author.bot) return;
-
-  const tiktokRegex = /(https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\/[^\s]+)/gi;
-  const matches = message.content.match(tiktokRegex);
-
-  if (matches && matches.length > 0) {
-    // yalnız 1 linki götürürük
-    await downloadAndSend(message, matches[0]);
-  }
-});
-
-client.once('ready', () => {
-  console.log(`Bot hazırdır: ${client.user.tag}`);
-});
-
-client.login(process.env.DISCORD_TOKEN);
+    # Bot-u işə sal
+    run_bot()
