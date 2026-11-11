@@ -165,7 +165,7 @@ def run_bot():
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_link))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
     # Keep-alive thread
     keep_alive_thread = threading.Thread(
