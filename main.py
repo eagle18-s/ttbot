@@ -47,16 +47,13 @@ def keep_alive_loop(application: Application):
     """Hər 2 dəqiqədən bir ping atır və adminə mesaj göndərir"""
     while True:
         try:
-            # 1. Sayta ping
             resp = requests.get(KEEP_ALIVE_URL, timeout=15)
             status = resp.status_code
             logger.info(f"Keep-alive ping: {status}")
 
-            # 2. Adminə mesaj
             if ADMIN_CHAT_ID:
                 msg = f"✅ Ping göndərilib, bot aktivdir\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\nStatus: {status}"
                 try:
-                    # Async funksiyanı ayrı thread-də təhlükəsiz işlətmək üçün
                     asyncio.run(
                         application.bot.send_message(
                             chat_id=int(ADMIN_CHAT_ID),
@@ -71,20 +68,22 @@ def keep_alive_loop(application: Application):
 
         time.sleep(PING_INTERVAL)
 
-# ================== VIDEO YÜKLƏMƏ ==================
+# ================== VIDEO YÜKLƏMƏ (TikTok & YouTube üçün optimallaşdırılmış) ==================
 def download_video(url: str) -> str | None:
     """yt-dlp ilə video yükləyir, temp path qaytarır"""
     ydl_opts = {
-        "format": "best[ext=mp4]/best",
+        # FFmpeg tələb etməyən və birbaşa birləşdirilmiş mp4 formatlarını üstün tutur
+        "format": "best[height<=720][ext=mp4]/best[ext=mp4]/best",
         "outtmpl": os.path.join(tempfile.gettempdir(), "%(id)s.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "retries": 3,
         "fragment_retries": 3,
-        "extractor_args": {
-            "tiktok": {"webpage_download": True}
-        },
+        # TikTok və digər platformalar üçün əlavə başlıqlar (bloklanmanın qarşısını almaq üçün)
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
     }
 
     try:
@@ -98,7 +97,7 @@ def download_video(url: str) -> str | None:
                         break
             return filename if os.path.exists(filename) else None
     except Exception as e:
-        logger.error(f"Download xətası: {e}")
+        logger.error(f"Download xətası ({url}): {e}")
         return None
 
 # ================== TELEGRAM HANDLERS ==================
@@ -121,7 +120,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     file_path = None
     try:
-        # Event loop-u təhlükəsiz şəkildə əldə edirik (Yeni Python versiyaları üçün)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -142,7 +140,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Video göndər
         with open(file_path, "rb") as f:
             await update.message.reply_video(
                 video=f,
@@ -164,7 +161,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== START ==================
 def run_bot():
-    # MainThread üzərində event loop olmamasını önləmək üçün qoruyucu yoxlama
     try:
         asyncio.get_event_loop()
     except RuntimeError:
@@ -172,11 +168,9 @@ def run_bot():
 
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Xəta verən '\' işarəsi təmizləndi:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
-    # Keep-alive thread
     keep_alive_thread = threading.Thread(
         target=keep_alive_loop,
         args=(application,),
@@ -185,14 +179,12 @@ def run_bot():
     keep_alive_thread.start()
     logger.info("Keep-alive thread started (every 2 min)")
 
-    # Bot polling
     logger.info("Bot started...")
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
 
-    # Flask-i ayrı thread-də işə salırıq
     flask_thread = threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
         daemon=True
@@ -200,6 +192,5 @@ if __name__ == "__main__":
     flask_thread.start()
     logger.info(f"Flask health server started on port {port}")
 
-    # Bot-u işə sal
     run_bot()
-    
+                               
