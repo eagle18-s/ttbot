@@ -1,7 +1,6 @@
 {
   "name": "tiktok-discord-bot",
   "version": "1.0.0",
-  "description": "Discord bot - TikTok videos without watermark",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,8 +10,5 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "node-fetch": "^2.7.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }
