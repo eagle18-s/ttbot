@@ -18,7 +18,7 @@ load_dotenv()
 
 # ================== KONFİQURASİYA ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")          # @pervizshydayev-in chat_id-si (rəqəm)
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 KEEP_ALIVE_URL = "https://ttbot-vw3o.onrender.com/"
 PING_INTERVAL = 120  # 2 dəqiqə
 
@@ -56,7 +56,7 @@ def keep_alive_loop(application: Application):
             if ADMIN_CHAT_ID:
                 msg = f"✅ Ping göndərilib, bot aktivdir\n🕒 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\nStatus: {status}"
                 try:
-                    # Sync wrapper (python-telegram-bot 21 async-dir)
+                    # Async funksiyanı ayrı thread-də təhlükəsiz işlətmək üçün
                     asyncio.run(
                         application.bot.send_message(
                             chat_id=int(ADMIN_CHAT_ID),
@@ -82,7 +82,6 @@ def download_video(url: str) -> str | None:
         "noplaylist": True,
         "retries": 3,
         "fragment_retries": 3,
-        # TikTok üçün ən yaxşı no-watermark cəhdi
         "extractor_args": {
             "tiktok": {"webpage_download": True}
         },
@@ -92,7 +91,6 @@ def download_video(url: str) -> str | None:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
-            # bəzən extension dəyişir
             if not os.path.exists(filename):
                 for f in os.listdir(tempfile.gettempdir()):
                     if info.get("id") in f:
@@ -123,8 +121,12 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     file_path = None
     try:
-        # blocking download-ı thread-də işlədirik
-        loop = asyncio.get_event_loop()
+        # Event loop-u təhlükəsiz şəkildə əldə edirik (Yeni Python versiyaları üçün)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+
         file_path = await loop.run_in_executor(None, download_video, url)
 
         if not file_path or not os.path.exists(file_path):
@@ -162,8 +164,15 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== START ==================
 def run_bot():
+    # MainThread üzərində event loop olmamasını önləmək üçün qoruyucu yoxlama
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Xəta verən '\' işarəsi təmizləndi:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
@@ -181,7 +190,6 @@ def run_bot():
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
-    # Render-də PORT environment variable gəlir
     port = int(os.environ.get("PORT", 10000))
 
     # Flask-i ayrı thread-də işə salırıq
@@ -194,3 +202,4 @@ if __name__ == "__main__":
 
     # Bot-u işə sal
     run_bot()
+    
