@@ -1,0 +1,5 @@
+python-telegram-bot==21.6
+yt-dlp
+Flask
+requests
+python-dotenv
