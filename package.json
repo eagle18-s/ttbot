@@ -1,7 +1,7 @@
 {
   "name": "tiktok-discord-bot",
   "version": "1.0.0",
-  "description": "Discord bot that downloads TikTok videos without watermark",
+  "description": "Discord bot - TikTok videos without watermark",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
