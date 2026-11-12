@@ -20,7 +20,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 KEEP_ALIVE_URL = "https://ttbot-vw3o.onrender.com/"
-PING_INTERVAL = 120  # 2 dəqiqə
+PING_INTERVAL = 300  # 2 dəqiqə
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable yoxdur!")
