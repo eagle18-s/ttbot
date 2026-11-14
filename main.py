@@ -1,5 +1,5 @@
 import os
-import time
+import tempfile
 import threading
 import logging
 import tempfile
@@ -10,6 +10,7 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatAction
+from telegram.request import HTTPXRequest
 import yt_dlp
 import requests
 from dotenv import load_dotenv
@@ -20,7 +21,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 KEEP_ALIVE_URL = "https://ttbot-vw3o.onrender.com/"
-PING_INTERVAL = 300  # 2 dəqiqə
+PING_INTERVAL = 300  # 5 dəqiqə (300 saniyə)
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable yoxdur!")
@@ -44,7 +45,7 @@ def ping():
 
 # ================== KEEP-ALIVE + ADMIN MESAJ ==================
 def keep_alive_loop(application: Application):
-    """Hər 2 dəqiqədən bir ping atır və adminə mesaj göndərir"""
+    """Hər 5 dəqiqədən bir ping atır və adminə mesaj göndərir"""
     while True:
         try:
             resp = requests.get(KEEP_ALIVE_URL, timeout=15)
@@ -68,11 +69,10 @@ def keep_alive_loop(application: Application):
 
         time.sleep(PING_INTERVAL)
 
-# ================== VIDEO YÜKLƏMƏ (TikTok & YouTube üçün optimallaşdırılmış) ==================
+# ================== VIDEO YÜKLƏMƏ (TikTok & Instagram/YouTube üçün optimallaşdırılmış) ==================
 def download_video(url: str) -> str | None:
-    """yt-dlp ilə video yükləyir, temp path qaytarır"""
+    """yt-dlp ilə video yükləyir, temp path qaytarır. Şəkil/slayd olduqda None qaytarır."""
     ydl_opts = {
-        # FFmpeg tələb etməyən və birbaşa birləşdirilmiş mp4 formatlarını üstün tutur
         "format": "best[height<=720][ext=mp4]/best[ext=mp4]/best",
         "outtmpl": os.path.join(tempfile.gettempdir(), "%(id)s.%(ext)s"),
         "quiet": True,
@@ -80,7 +80,6 @@ def download_video(url: str) -> str | None:
         "noplaylist": True,
         "retries": 3,
         "fragment_retries": 3,
-        # TikTok və digər platformalar üçün əlavə başlıqlar (bloklanmanın qarşısını almaq üçün)
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
@@ -97,7 +96,7 @@ def download_video(url: str) -> str | None:
                         break
             return filename if os.path.exists(filename) else None
     except Exception as e:
-        logger.error(f"Download xətası ({url}): {e}")
+        logger.error(f"Download xətası (Ola bilər ki, link şəkiddir və ya video yoxdur) [{url}]: {e}")
         return None
 
 # ================== TELEGRAM HANDLERS ==================
@@ -128,7 +127,10 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = await loop.run_in_executor(None, download_video, url)
 
         if not file_path or not os.path.exists(file_path):
-            await status_msg.edit_text("❌ Video yüklənə bilmədi. Linki yoxlayın və ya yenidən cəhd edin.")
+            await status_msg.edit_text(
+                "❌ Video yüklənə bilmədi.\n"
+                "Qeyd: Göndərdiyiniz linkdə video olmaya bilər (şəkil və ya slayd postu ola bilər) və ya link etibarsızdır."
+            )
             return
 
         file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
@@ -166,7 +168,10 @@ def run_bot():
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    # Bağlantı hovuzunu böyüdürük ki, "Pool Timeout" xətası verməsin
+    custom_request = HTTPXRequest(connection_pool_size=50, pool_timeout=10.0)
+
+    application = Application.builder().token(BOT_TOKEN).request(custom_request).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
@@ -177,7 +182,7 @@ def run_bot():
         daemon=True
     )
     keep_alive_thread.start()
-    logger.info("Keep-alive thread started (every 2 min)")
+    logger.info("Keep-alive thread started (every 5 min)")
 
     logger.info("Bot started...")
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
@@ -193,4 +198,4 @@ if __name__ == "__main__":
     logger.info(f"Flask health server started on port {port}")
 
     run_bot()
-                               
+    
