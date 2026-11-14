@@ -124,8 +124,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 Salam!\n\n"
-        "Mənə **TikTok**, **Instagram**, **YouTube** və digər platformalardan link at.\n"
-        "Mən sənə **su nişansız** video göndərəcəyəm.\n\n"
+        "Mənə TikTok və Instagram linki at.\n"
+        "Mən sənə su nişansız video göndərəcəyəm.\n\n"
         "Sadəcə linki göndər 👇"
     )
 
