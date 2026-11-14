@@ -2,7 +2,6 @@ import os
 import tempfile
 import threading
 import logging
-import tempfile
 import asyncio
 from datetime import datetime
 
@@ -21,7 +20,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 KEEP_ALIVE_URL = "https://ttbot-vw3o.onrender.com/"
-PING_INTERVAL = 300  # 5 dəqiqə (300 saniyə)
+PING_INTERVAL = 300  # 5 dəqiqə
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable yoxdur!")
@@ -69,7 +68,7 @@ def keep_alive_loop(application: Application):
 
         time.sleep(PING_INTERVAL)
 
-# ================== VIDEO YÜKLƏMƏ (TikTok & Instagram/YouTube üçün optimallaşdırılmış) ==================
+# ================== VIDEO YÜKLƏMƏ ==================
 def download_video(url: str) -> str | None:
     """yt-dlp ilə video yükləyir, temp path qaytarır. Şəkil/slayd olduqda None qaytarır."""
     ydl_opts = {
@@ -98,6 +97,11 @@ def download_video(url: str) -> str | None:
     except Exception as e:
         logger.error(f"Download xətası (Ola bilər ki, link şəkiddir və ya video yoxdur) [{url}]: {e}")
         return None
+
+# ================== GLOBAL ERROR HANDLER ==================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Gözlənilməz bot xətalarını tutub loglayır ki, bot çökməsin"""
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
 # ================== TELEGRAM HANDLERS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -168,13 +172,16 @@ def run_bot():
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
-    # Bağlantı hovuzunu böyüdürük ki, "Pool Timeout" xətası verməsin
+    # Bağlantı hovuzu (Pool Timeout qarşısını almaq üçün)
     custom_request = HTTPXRequest(connection_pool_size=50, pool_timeout=10.0)
 
     application = Application.builder().token(BOT_TOKEN).request(custom_request).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+
+    # Global xəta idarəedicisini qeydiyyatdan keçiririk
+    application.add_error_handler(error_handler)
 
     keep_alive_thread = threading.Thread(
         target=keep_alive_loop,
@@ -198,4 +205,3 @@ if __name__ == "__main__":
     logger.info(f"Flask health server started on port {port}")
 
     run_bot()
-    
